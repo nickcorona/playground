@@ -1,1 +1,1 @@
-kaggle datasets download -d anmolkumar/house-price-prediction-challenge
+kaggle competitions download -c tabular-playground-series-jan-2021
