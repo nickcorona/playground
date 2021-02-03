@@ -1,1 +1,1 @@
-kaggle competitions download -c tabular-playground-series-jan-2021
+kaggle competitions download -c tabular-playground-series-feb-2021

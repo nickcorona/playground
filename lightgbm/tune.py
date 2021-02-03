@@ -15,11 +15,7 @@ import phik
 from helpers import encode_dates, loguniform, similarity_encode
 
 df = pd.read_csv(
-    r"data\appstore_games.csv",
-    parse_dates=["Original Release Date", "Current Version Release Date"],
-    index_col=[],
-    delimiter=",",
-    low_memory=False,
+    r"data\train.csv", parse_dates=[], index_col=[], delimiter=",", low_memory=False,
 )
 
 PROFILE = False
@@ -33,7 +29,7 @@ print(
     .sort_values(["dtype", "proportion unique"])
 )
 
-TARGET = "Average User Rating"
+TARGET = "target"
 print(f"Missing targets: {df[TARGET].isnull().sum()}")
 print(f"% missing: {df[TARGET].isnull().sum() / len(df):.0%}")
 
@@ -41,12 +37,9 @@ DROP_MISSING = False
 if DROP_MISSING:
     df = df.dropna(subset=[TARGET])
 
-TARGET_LEAKAGE = ["ID"]
+TARGET_LEAKAGE = []
 y = df[TARGET].replace(np.nan, 0)
-X = df.drop(
-    [TARGET, *TARGET_LEAKAGE],
-    axis=1,
-)
+X = df.drop([TARGET, *TARGET_LEAKAGE], axis=1,)
 
 obj_cols = X.select_dtypes("object").columns
 nunique = X[obj_cols].nunique()
@@ -60,26 +53,20 @@ unique.columns = [
 ]
 print(unique)
 
-ENCODE = True
+ENCODE = False
 if ENCODE:
     X = similarity_encode(
-        X,
-        encode_columns=[
-            "Subtitle",
-        ],
-        n_prototypes=4,
-        preran=False,
-        drop_original=True,
+        X, encode_columns=[], n_prototypes=4, preran=False, drop_original=True,
     )
 
-LENGTH_ENCODE = True
+LENGTH_ENCODE = False
 if LENGTH_ENCODE:
     len_encode = ["URL"]
     for col in len_encode:
         X[f"{col}_len"] = X[col].apply(len)
         X = X.drop(col, axis=1)
 
-CATEGORIZE = False
+CATEGORIZE = True
 if CATEGORIZE:
     X[obj_cols] = X[obj_cols].astype("category")
 
@@ -104,19 +91,19 @@ Xs, ys = Xt.loc[sample_idx], yt.loc[sample_idx]
 ds = lgb.Dataset(Xs, ys)
 dv = lgb.Dataset(Xv, yv, free_raw_data=False)
 
-OBJECTIVE = "multiclass"
-METRIC = "multi_logloss"
+OBJECTIVE = "regression"
+METRIC = "rmse"
 MAXIMIZE = False
 EARLY_STOPPING_ROUNDS = 10
 MAX_ROUNDS = 10000
-REPORT_ROUNDS = 5
+REPORT_ROUNDS = 100
 
 params = {
     "objective": OBJECTIVE,
     "metric": METRIC,
     "verbose": -1,
     "n_jobs": 6,
-    "num_classes": 3,
+    # "num_classes": 3,
     # "tweedie_variance_power": 1.3,
 }
 
@@ -133,11 +120,11 @@ model = lgb.train(
 lgb.plot_importance(model, grid=False, max_num_features=20, importance_type="gain")
 plt.show()
 
-TUNE_ETA = True
+TUNE_ETA = False
 best_etas = {"learning_rate": [], "score": []}
 if TUNE_ETA:
-    for _ in range(120):
-        eta = loguniform(-5, 1)
+    for _ in range(30):
+        eta = loguniform(-2, 1)
         best_etas["learning_rate"].append(eta)
         params["learning_rate"] = eta
         model = lgb.train(
@@ -152,10 +139,7 @@ if TUNE_ETA:
         best_etas["score"].append(model.best_score["valid"][METRIC])
 
     best_eta_df = pd.DataFrame.from_dict(best_etas)
-    lowess_data = lowess(
-        best_eta_df["score"],
-        best_eta_df["learning_rate"],
-    )
+    lowess_data = lowess(best_eta_df["score"], best_eta_df["learning_rate"],)
 
     rounded_data = lowess_data.copy()
     rounded_data[:, 1] = rounded_data[:, 1].round(4)
@@ -181,8 +165,7 @@ if TUNE_ETA:
     params["learning_rate"] = best_eta
 else:
     # best learning rate once run
-    # multi_logloss: 0.00120139
-    params["learning_rate"] = 0.22150522497815395
+    params["learning_rate"] = 0.017341132862970576
 
 model = lgb.train(
     params,
@@ -194,10 +177,10 @@ model = lgb.train(
     verbose_eval=REPORT_ROUNDS,
 )
 
-DROP_CORRELATED = True
+DROP_CORRELATED = False
 if DROP_CORRELATED:
     threshold = 0.75
-    corr = Xt.corr(method="kendall")
+    corr = Xt.phik_matrix()
     upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(np.bool))
     upper = upper.stack()
     high_upper = upper[(abs(upper) > threshold)]
@@ -220,16 +203,8 @@ if DROP_CORRELATED:
                     X.drop(drop_set, axis=1), y, random_state=SEED
                 )
                 Xs, ys = Xt.loc[sample_idx], yt.loc[sample_idx]
-                dt = lgb.Dataset(
-                    Xt,
-                    yt,
-                    silent=True,
-                )
-                dv = lgb.Dataset(
-                    Xv,
-                    yv,
-                    silent=True,
-                )
+                dt = lgb.Dataset(Xt, yt, silent=True,)
+                dv = lgb.Dataset(Xv, yv, silent=True,)
                 drop_model = lgb.train(
                     params,
                     dt,
@@ -252,7 +227,7 @@ if DROP_CORRELATED:
         )
         print(f"ending score: {best_score:.4f}")
 else:
-    correlated_features = {"SepalWidthCm"}
+    correlated_features = {}
 
 correlation_elimination = len(correlated_features) > 0
 if correlation_elimination:
@@ -276,7 +251,7 @@ if correlation_elimination:
     )
 
 # decide which unimportant features to drop to improve the model
-DROP_UNIMPORTANT = True
+DROP_UNIMPORTANT = False
 if DROP_UNIMPORTANT:
     sorted_features = [
         feature
@@ -317,8 +292,16 @@ if DROP_UNIMPORTANT:
     print(
         f"dropped features: {unimportant_features if len(unimportant_features) > 0 else None}"
     )
+
+    # redefine
+    Xt, Xv, yt, yv = train_test_split(
+        X.drop(unimportant_features, axis=1), y, random_state=SEED
+    )
+    Xs, ys = Xt.loc[sample_idx], yt.loc[sample_idx]
+    dt = lgb.Dataset(Xt, yt, silent=True)
+    dv = lgb.Dataset(Xv, yv, silent=True)
 else:
-    unimportant_features = []
+    unimportant_features = ["cat4"]
 
 feature_elimination = len(unimportant_features) > 0
 
@@ -380,23 +363,22 @@ else:
     dt = lgb.Dataset(Xt, yt, silent=True)
     ds = lgb.Dataset(Xs, ys, silent=True)
     dv = lgb.Dataset(Xv, yv, silent=True)
-    # multi_logloss: 0.16234512513461433
+    # rmse: 0.8440539510789237
     best_params = {
-        "objective": "multiclass",
-        "metric": "multi_logloss",
+        "objective": "regression",
+        "metric": "rmse",
         "verbose": -1,
         "n_jobs": 6,
-        "num_classes": 3,
-        "learning_rate": 0.22150522497815395,
+        "learning_rate": 0.017341132862970576,
         "feature_pre_filter": False,
-        "lambda_l1": 0.0,
-        "lambda_l2": 0.0,
-        "num_leaves": 2,
-        "feature_fraction": 1.0,
-        "bagging_fraction": 0.40995826910607314,
-        "bagging_freq": 1,
-        "min_child_samples": 20,
-        "num_boost_rounds": 64,
+        "lambda_l1": 9.655244017371496,
+        "lambda_l2": 9.53711406338968,
+        "num_leaves": 116,
+        "feature_fraction": 0.4,
+        "bagging_fraction": 0.7444879374822233,
+        "bagging_freq": 5,
+        "min_child_samples": 25,
+        "num_boost_rounds": 867,
     }
     model = lgb.train(
         best_params,
@@ -418,30 +400,13 @@ figure_path = Path("figures")
 figure_path.mkdir(exist_ok=True)
 plt.savefig(figure_path / "feature_importance.png")
 
-from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
-    mean_squared_error,
-    plot_roc_curve,
-    r2_score,
-    roc_curve,
-)
-
-accuracy_score(yv, model.predict(Xv).argmax(axis=1))  # 0.8947368421052632
-
-import numpy as np
-from sklearn.metrics import mean_squared_error, r2_score
-
 # test score
-TEST = False
+TEST = True
 if TEST:
-    df_test = pd.read_csv("data/test.csv", parse_dates=["date"])
-    y_test = df_test["quantity"]
-    X_test = df_test.drop("quantity", axis=1)
-    CATEGORIZE = True
-    if CATEGORIZE:
-        X_test[obj_cols] = X_test[obj_cols].astype("category")
-    X_test = encode_dates(X_test, "date")
-    X_test = X_test.drop(dropped_features, axis=1)
-    r2_score(y_test, model.predict(X_test))
-    np.sqrt(mean_squared_error(y_test, model.predict(X_test)))
+    df_test = pd.read_csv("data/test.csv")
+    df_test[obj_cols] = df_test[obj_cols].astype("category")
+    X_test = df_test.drop(dropped_features, axis=1)
+    y_pred = model.predict(X_test)
+    submission = pd.Series(y_pred, index=df_test["id"])
+    submission.name = "target"
+    submission.to_csv("submission/lightgbm.csv")
